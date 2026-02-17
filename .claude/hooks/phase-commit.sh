@@ -117,17 +117,17 @@ git -C "$CWD" commit --no-verify -m "$FULL_MSG" >/dev/null 2>&1 || {
 }
 
 # ── verified 태그 생성 ──
-for tag in "${TAG_LIST[@]}"; do
-  git -C "$CWD" tag "$tag" 2>/dev/null || true
-done
+if [ ${#TAG_LIST[@]} -gt 0 ]; then
+  for tag in "${TAG_LIST[@]}"; do
+    git -C "$CWD" tag "$tag" 2>/dev/null || true
+  done
+  echo "[proofchain] Tags: ${TAG_LIST[*]}" >&2
+fi
 
 # ── 스냅샷 갱신 ──
 cp "$STATE" "$SNAPSHOT"
 
 # ── 결과 보고 (stderr) ──
 echo "[proofchain] ${SUBJECT}" >&2
-if [ ${#TAG_LIST[@]} -gt 0 ]; then
-  echo "[proofchain] Tags: ${TAG_LIST[*]}" >&2
-fi
 
 exit 0

@@ -1,5 +1,5 @@
 #!/bin/bash
-# HITL Phase Guard — PreToolUse Hook (v2.1: Approach A + boundary fix)
+# HITL Phase Guard — PreToolUse Hook (v2.2: Approach A + boundary fix + Bash boundary)
 # Gate: Phase 기반 파일 접근 제어 + 자기 보호 + 코드 확장자 검사
 # 5-Phase Model: spec, tc, code, test, verified
 # Edit/Write: 영역별 정밀 검사 + 코드 확장자 차단
@@ -121,6 +121,14 @@ if [ "$TOOL" = "Bash" ]; then
     else
       # ── 관리 경로 외부: 코드 확장자 감지 (Approach A, 휴리스틱) ──
       if echo "$CMD" | grep -qiE "\.(${BASH_CODE_EXT})\b"; then
+        # 예외: 프로젝트 외부 절대 경로 대상 (boundary check)
+        CODE_FILE=$(echo "$CMD" | grep -oiE '/[^ >"'"'"']*\.('"${BASH_CODE_EXT}"')' | head -1 || true)
+        if [ -n "$CODE_FILE" ]; then
+          case "$CODE_FILE" in
+            "$CWD"/*) ;; # 프로젝트 내부 → 계속 검사
+            *) exit 0 ;; # 프로젝트 외부 절대 경로 → 허용
+          esac
+        fi
         # 예외: 설정 파일 패턴 (*.config.ts, .eslintrc.js 등)
         if ! echo "$CMD" | grep -qE '\.(config|setup|rc)\.(ts|js|mjs|cjs|mts)\b'; then
           AREAS_JSON=$(jq '.areas // {}' "$STATE" 2>/dev/null)
