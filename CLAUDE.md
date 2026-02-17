@@ -109,6 +109,22 @@ cycle > 1일 때 스킬이 자동으로 amendment 모드로 동작한다.
 | `restore-state.sh` | SessionStart | 세션 시작 시 HITL 현황 복원 |
 | `checkpoint.sh` | PreCompact | 컨텍스트 압축 전 작업 상태 보존 |
 
+## 브랜치 전략
+
+| 브랜치 | 용도 | 내용 |
+|--------|------|------|
+| `main` | 프레임워크 템플릿 | HITL 엔진만 (hooks, skills, CLAUDE.md, HITL.md) — 프로젝트 코드 없음 |
+| `project/<name>` | 개별 프로젝트 | main에서 분기, SPEC + TC + src + tests 포함 |
+
+**규칙:**
+1. **main에서 직접 개발 금지** — `hitl-state.json`의 `project.code`가 비어있으면 프로젝트 미설정 상태. 반드시 `project/<name>` 브랜치를 만들고 시작한다.
+2. **새 프로젝트 시작 시**: `git checkout -b project/<name>` → 프로젝트 설정 → `/ears-spec`
+3. **프레임워크 업데이트**: main에서 수정 후 각 project 브랜치에 merge
+
+세션 시작 시 main 브랜치에 있으면 경고가 표시된다.
+
+---
+
 ## 핵심 파일
 
 ```
