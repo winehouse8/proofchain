@@ -1,0 +1,27 @@
+{
+  "name": "260216_logic_playground",
+  "version": "1.0.0",
+  "description": "**ISO 26262-grade software verification for AI-assisted development with Claude Code.**",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/winehouse8/proofchain.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/winehouse8/proofchain/issues"
+  },
+  "homepage": "https://github.com/winehouse8/proofchain#readme",
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
