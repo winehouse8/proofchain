@@ -25,15 +25,15 @@
   "areas": {
     "CA": {
       "name": "Calculator",
-      "phase": "spec",
+      "phase": "tc",
       "cycle": 1,
       "spec": {
         "file": "SPEC-PC-CA.md",
-        "status": "draft"
+        "status": "approved"
       },
       "tc": {
         "file": "TC-CA.json",
-        "status": "pending"
+        "status": "in_progress"
       },
       "code": {
         "files": []
@@ -52,6 +52,16 @@
       "cycle": 1,
       "actor": "human",
       "reason": "E2E 프레임워크 테스트를 위한 계산기 영역 등록"
+    },
+    {
+      "timestamp": "2026-02-17T10:01:00Z",
+      "area": "CA",
+      "action": "phase_transition",
+      "from": "spec",
+      "to": "tc",
+      "cycle": 1,
+      "actor": "human",
+      "reason": "SPEC 승인 완료, TC 설계 시작"
     }
   ]
 }
