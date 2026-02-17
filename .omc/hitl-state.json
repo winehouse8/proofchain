@@ -25,17 +25,17 @@
   "areas": {
     "CA": {
       "name": "Calculator",
-      "phase": "spec",
+      "phase": "tc",
       "cycle": 2,
       "cycle_entry": "spec",
       "cycle_reason": "거듭제곱(power) 기능 추가를 위한 SPEC 변경",
       "spec": {
         "file": "SPEC-PC-CA.md",
-        "status": "amendment"
+        "status": "approved"
       },
       "tc": {
         "file": "TC-CA.json",
-        "status": "approved"
+        "status": "amendment"
       },
       "code": {
         "files": ["src/calculator.ts"]
@@ -111,6 +111,16 @@
       "actor": "human",
       "reason": "거듭제곱(power) 기능 추가",
       "affected_reqs": ["REQ-CA-007(new)"]
+    },
+    {
+      "timestamp": "2026-02-17T10:11:00Z",
+      "area": "CA",
+      "action": "phase_transition",
+      "from": "spec",
+      "to": "tc",
+      "cycle": 2,
+      "actor": "human",
+      "reason": "SPEC amendment 승인, supplementary TC 설계 시작"
     }
   ]
 }

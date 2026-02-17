@@ -1,14 +1,14 @@
 # SPEC-PC-CA: Calculator
 
 **Area:** CA (Calculator)
-**Cycle:** 1
-**Status:** draft
+**Cycle:** 2
+**Status:** amendment
 
 ---
 
 ## 1. 개요
 
-사칙연산을 수행하는 웹 계산기. 두 수를 입력받아 덧셈, 뺄셈, 곱셈, 나눗셈 결과를 반환한다.
+사칙연산과 거듭제곱을 수행하는 웹 계산기. 두 수를 입력받아 연산 결과를 반환한다.
 
 ## 2. 요구사항
 
@@ -35,6 +35,14 @@ If the divisor is zero, the calculator **shall** return an error message "Cannot
 ### REQ-CA-006: 소수점 처리
 **[EARS: Ubiquitous]**
 The calculator **shall** handle floating-point numbers and return results with up to 10 decimal places of precision.
+
+### REQ-CA-007: 거듭제곱 (cycle 2 추가)
+**[EARS: Ubiquitous]**
+The calculator **shall** return the result of raising the first number to the power of the second number when the power operation is invoked.
+
+### REQ-CA-008: 음수 지수 처리 (cycle 2 추가)
+**[EARS: Ubiquitous]**
+The calculator **shall** handle negative exponents and return the reciprocal result with up to 10 decimal places of precision.
 
 ## 3. 범위 외
 
