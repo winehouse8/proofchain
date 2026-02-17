@@ -66,6 +66,24 @@ It also blocks:
 - **`.claude/` modifications** — the framework protects itself from AI tampering
 - **Shared file conflicts** — files mapped to multiple areas are checked against all
 
+A `PostToolUse` hook (`phase-commit.sh`) auto-commits at every phase transition:
+
+```
+Claude updates hitl-state.json: phase "spec" → "tc"
+  → Hook detects phase change vs snapshot
+  → git add -A (captures SPEC + state change)
+  → git commit "[proofchain] AU(Auth): spec → tc (cycle 1)"
+  → If verified: git tag AU-verified-c1
+```
+
+This provides full artifact history for ISO 26262 compliance:
+```bash
+git log --grep="proofchain"              # Process history
+git tag -l "AU-*"                        # Verified milestones
+git show AU-verified-c1:.omc/specs/SPEC-MY-AU.md  # Reproduce past state
+git diff AU-verified-c1..AU-verified-c2  # Changes between cycles
+```
+
 ### Workflow Layer: Skills
 
 | Command | Phase | What It Does |
@@ -160,6 +178,7 @@ You: "B" → DB re-enters at tc, cycle 2
 .claude/
 ├── hooks/
 │   ├── check-phase.sh          Phase guard (PreToolUse)
+│   ├── phase-commit.sh         Auto-commit on transition (PostToolUse)
 │   ├── restore-state.sh        Status reporter (SessionStart)
 │   └── checkpoint.sh           State preserver (PreCompact)
 ├── skills/

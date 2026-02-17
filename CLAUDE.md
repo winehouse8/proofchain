@@ -105,6 +105,7 @@ cycle > 1일 때 스킬이 자동으로 amendment 모드로 동작한다.
 | 훅 | 유형 | 역할 |
 |----|------|------|
 | `check-phase.sh` | PreToolUse | Phase 기반 파일 접근 차단 + 다중 영역 공유 파일 검사 + `.claude/` 자기 보호 |
+| `phase-commit.sh` | PostToolUse | Phase 전환 감지 → 자동 git commit + verified 시 git tag 생성 |
 | `restore-state.sh` | SessionStart | 세션 시작 시 HITL 현황 복원 |
 | `checkpoint.sh` | PreCompact | 컨텍스트 압축 전 작업 상태 보존 |
 
