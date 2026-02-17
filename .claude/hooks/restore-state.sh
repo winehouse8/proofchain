@@ -8,6 +8,18 @@ STATE="$CWD/.omc/hitl-state.json"
 
 [ ! -f "$STATE" ] && exit 0
 
+# 브랜치 확인 — main에서 개발 방지
+BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+  PROJECT_CODE=$(jq -r '.project.code // ""' "$STATE" 2>/dev/null)
+  if [ -z "$PROJECT_CODE" ]; then
+    echo ""
+    echo "⚠ 현재 main 브랜치입니다. 프로젝트 개발은 별도 브랜치에서 진행하세요."
+    echo "  → git checkout -b project/<name>"
+    echo ""
+  fi
+fi
+
 # 각 영역의 상태를 요약
 echo "=== HITL 현황 ==="
 jq -r '
