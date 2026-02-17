@@ -1,8 +1,14 @@
 #!/bin/bash
-# HITL Phase Guard — PreToolUse Hook
-# Gate: Phase 기반 파일 접근 제어 + 자기 보호
+# HITL Phase Guard — PreToolUse Hook (v2.1: Approach A + boundary fix)
+# Gate: Phase 기반 파일 접근 제어 + 자기 보호 + 코드 확장자 검사
 # 5-Phase Model: spec, tc, code, test, verified
-# Edit/Write: 영역별 정밀 검사, Bash: 휴리스틱 쓰기 감지
+# Edit/Write: 영역별 정밀 검사 + 코드 확장자 차단
+# Bash: 휴리스틱 쓰기 감지 + 코드 확장자 휴리스틱
+#
+# Approach A: 관리 경로(src/, tests/) 외부의 코드 파일 쓰기를 차단
+#   - Edit/Write: 정확한 확장자 매칭 (file_path 기반)
+#   - Bash: 휴리스틱 패턴 매칭 (명령어 문자열 기반, 오탐 가능)
+#   - 예외: 루트 설정 파일 (*.config.*, *.setup.*, .*rc, .*rc.*)
 #
 # exit 0 = 허용, exit 2 = 차단 (+ stderr로 피드백)
 
@@ -13,14 +19,56 @@ TOOL=$(echo "$INPUT" | jq -r '.tool_name')
 CWD=$(echo "$INPUT" | jq -r '.cwd')
 STATE="$CWD/.omc/hitl-state.json"
 
+# ── Bash 휴리스틱용 코드 확장자 패턴 (주요 언어만, 짧은 버전) ──
+BASH_CODE_EXT='ts|tsx|js|jsx|mjs|cjs|py|rs|go|c|h|cpp|hpp|cs|java|kt|scala|swift|dart|rb|php|lua|sh|bash|ex|hs|vue|svelte|css|scss|sass|html|htm|sql|graphql|wasm|zig|nim|jl|cr|elm|sol'
+
+# ── phase별 가능한 전환 출력 ──
+print_transitions() {
+  local phase="$1"
+  case "$phase" in
+    spec)
+      cat >&2 <<'TRANSITIONS'
+현재 spec 단계에서 가능한 전환:
+  → forward → tc : SPEC 완료 + 사람 승인 → /test-gen-design
+TRANSITIONS
+      ;;
+    tc)
+      cat >&2 <<'TRANSITIONS'
+현재 tc 단계에서 가능한 전환:
+  → forward  → code : TC 승인 → 코딩 시작
+  → backward → spec : SPEC 수정 필요 → /ears-spec
+TRANSITIONS
+      ;;
+    code)
+      cat >&2 <<'TRANSITIONS'
+현재 code 단계에서 가능한 전환:
+  → forward  → test : 코딩 완료 → /test-gen-code
+  → backward → spec : SPEC 문제 발견 → /ears-spec
+  → backward → tc   : TC 보강 필요 → /test-gen-design
+TRANSITIONS
+      ;;
+    test)
+      cat >&2 <<'TRANSITIONS'
+현재 test 단계에서 가능한 전환:
+  → forward  → verified : 전부 통과 + 사람 최종 검증
+  → backward → spec     : SPEC 문제 → /ears-spec
+  → backward → tc       : TC 부족 → /test-gen-design
+  → backward → code     : 코드 수정 필요
+TRANSITIONS
+      ;;
+  esac
+}
+
+# ══════════════════════════════════════════════════════════════
 # ── Bash 도구: .claude/ 조작 차단 + 보호 경로 쓰기 감지 ──
+# ══════════════════════════════════════════════════════════════
 if [ "$TOOL" = "Bash" ]; then
   CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
   # .claude/ 보호
   if echo "$CMD" | grep -qE '\.claude/'; then
     echo "BLOCKED: .claude/ 디렉토리 조작이 차단되었습니다." >&2
-    echo "HITL 훅 설정은 보호됩니다." >&2
+    echo "HITL 훅과 스킬 설정은 보호됩니다." >&2
     exit 2
   fi
 
@@ -39,6 +87,7 @@ if [ "$TOOL" = "Bash" ]; then
     echo "$CMD" | grep -qE '\btests/' && BASH_TEST=true
 
     if $BASH_SRC || $BASH_SPEC || $BASH_TC || $BASH_TEST; then
+      # ── 관리 경로 대상: phase 검사 ──
       AREAS_JSON=$(jq '.areas // {}' "$STATE" 2>/dev/null)
       AREA_COUNT=$(echo "$AREAS_JSON" | jq 'length')
       [ "$AREA_COUNT" = "0" ] && exit 0
@@ -62,10 +111,28 @@ if [ "$TOOL" = "Bash" ]; then
       fi
 
       if [ -n "$BLOCKED_PATH" ]; then
-        echo "BLOCKED: Bash 명령이 보호 경로(${BLOCKED_PATH})를 수정하려 합니다." >&2
-        echo "활성 phase에서 해당 경로 수정이 허용되지 않습니다." >&2
-        echo "reentry를 시작하거나, Edit/Write 도구를 사용하세요." >&2
+        echo "BLOCKED: Bash 쓰기 명령이 보호 경로(${BLOCKED_PATH})를 수정하려 합니다." >&2
+        echo "활성 영역 중 해당 경로를 수정할 수 있는 phase가 없습니다." >&2
+        echo "" >&2
+        echo "hitl-state.json을 확인하고, 사람에게 진행 방향을 안내하세요." >&2
+        echo "CLAUDE.md의 Phase 안내와 Reentry 시나리오를 참조하세요." >&2
         exit 2
+      fi
+    else
+      # ── 관리 경로 외부: 코드 확장자 감지 (Approach A, 휴리스틱) ──
+      if echo "$CMD" | grep -qiE "\.(${BASH_CODE_EXT})\b"; then
+        # 예외: 설정 파일 패턴 (*.config.ts, .eslintrc.js 등)
+        if ! echo "$CMD" | grep -qE '\.(config|setup|rc)\.(ts|js|mjs|cjs|mts)\b'; then
+          AREAS_JSON=$(jq '.areas // {}' "$STATE" 2>/dev/null)
+          AREA_COUNT=$(echo "$AREAS_JSON" | jq 'length')
+          if [ "$AREA_COUNT" != "0" ]; then
+            echo "BLOCKED: Bash 쓰기 명령이 관리 경로 외부에서 코드 파일을 수정하려 합니다." >&2
+            echo "" >&2
+            echo "프로덕트 코드는 src/에, 테스트 코드는 tests/에 작성하세요." >&2
+            echo "ISO 26262 추적성(Part 6 §9.3)을 위해 관리 경로 내에서 작업해야 합니다." >&2
+            exit 2
+          fi
+        fi
       fi
     fi
   fi
@@ -73,7 +140,9 @@ if [ "$TOOL" = "Bash" ]; then
   exit 0
 fi
 
+# ══════════════════════════════════════════════════════════════
 # ── Edit/Write만 대상 (Read 등 다른 도구는 통과) ──
+# ══════════════════════════════════════════════════════════════
 if [ "$TOOL" != "Edit" ] && [ "$TOOL" != "Write" ]; then
   exit 0
 fi
@@ -82,11 +151,17 @@ fi
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 [ -z "$FILE_PATH" ] && exit 0
 
+# ── 프로젝트 외부 파일은 통과 (boundary check) ──
+case "$FILE_PATH" in
+  "$CWD"/*) ;;
+  *) exit 0 ;;
+esac
+
 # ── 자기 보호: .claude/ 수정 차단 ──
 case "$FILE_PATH" in
-  */.claude/*|*/.claude)
+  */.claude/*|*/.claude/)
     echo "BLOCKED: .claude/ 디렉토리는 보호됩니다." >&2
-    echo "HITL 훅 설정을 수정할 수 없습니다." >&2
+    echo "HITL 훅과 스킬 설정을 수정할 수 없습니다." >&2
     exit 2
     ;;
 esac
@@ -101,14 +176,50 @@ IS_TC=false
 IS_TEST=false
 
 case "$FILE_PATH" in
-  */src/*)             IS_SRC=true ;;
   */.omc/specs/*)      IS_SPEC=true ;;
   */.omc/test-cases/*) IS_TC=true ;;
+  */.omc/*)            exit 0 ;;
+  */src/*)             IS_SRC=true ;;
   */tests/*)           IS_TEST=true ;;
-  *)                   exit 0 ;;  # 보호 대상 아님 → 허용
+  *)
+    # ══════════════════════════════════════════════════════════
+    # ── Approach A: 관리 경로 외부 코드 확장자 검사 ──
+    # ══════════════════════════════════════════════════════════
+    EXT="${FILE_PATH##*.}"
+    EXT_LOWER=$(echo "$EXT" | tr '[:upper:]' '[:lower:]')
+    case "$EXT_LOWER" in
+      ts|tsx|js|jsx|mjs|cjs|mts|cts|py|pyx|pyi|rs|go|c|h|cpp|hpp|cc|hh|cxx|hxx|cs|java|kt|kts|scala|groovy|gvy|swift|dart|rb|php|pl|pm|lua|ps1|sh|bash|zsh|fish|ex|exs|erl|hrl|hs|lhs|ml|mli|clj|cljs|cljc|fs|fsx|elm|re|rei|zig|nim|cr|jl|v|r|sol|move|cairo|vue|svelte|astro|css|scss|sass|less|styl|html|htm|pug|ejs|hbs|njk|sql|graphql|gql|wasm|wat)
+        BASENAME=$(basename "$FILE_PATH")
+        case "$BASENAME" in
+          *.config.*|*.setup.*|.?*rc|.?*rc.*) exit 0 ;;
+        esac
+
+        AREAS_JSON=$(jq '.areas // {}' "$STATE" 2>/dev/null)
+        AREA_COUNT=$(echo "$AREAS_JSON" | jq 'length')
+        [ "$AREA_COUNT" = "0" ] && exit 0
+
+        cat >&2 <<EOF
+BLOCKED: 코드 파일이 관리 경로(src/, tests/) 외부에 있습니다.
+파일: $FILE_PATH
+
+프로덕트 코드는 src/에, 테스트 코드는 tests/에 작성하세요.
+ISO 26262 추적성(Part 6 §9.3)을 위해 관리 경로 내에서 작업해야 합니다.
+
+이 파일이 설정 파일이라면, 허용되는 네이밍 패턴:
+  *.config.* | *.setup.* | .*rc | .*rc.*
+  (예: vite.config.ts, .eslintrc.js, jest.setup.ts)
+EOF
+        exit 2
+        ;;
+      *)
+        exit 0 ;;
+    esac
+    ;;
 esac
 
+# ══════════════════════════════════════════════════════════════
 # ── 영역 phase 수집 ──
+# ══════════════════════════════════════════════════════════════
 AREAS_JSON=$(jq '.areas // {}' "$STATE" 2>/dev/null)
 AREA_COUNT=$(echo "$AREAS_JSON" | jq 'length')
 [ "$AREA_COUNT" = "0" ] && exit 0
@@ -116,7 +227,6 @@ AREA_COUNT=$(echo "$AREAS_JSON" | jq 'length')
 # ── 파일이 속한 영역 찾기 (다중 영역 매핑 지원) ──
 TARGET_AREAS=""
 
-# SPEC 파일 → 영역 매핑 (1:1)
 if $IS_SPEC; then
   TARGET_AREAS=$(jq -r --arg fp "$FILE_PATH" '
     .areas | to_entries[] | select(.value.spec.file) |
@@ -124,7 +234,6 @@ if $IS_SPEC; then
     .key' "$STATE" 2>/dev/null)
 fi
 
-# TC 파일 → 영역 매핑 (1:1)
 if $IS_TC; then
   TARGET_AREAS=$(jq -r --arg fp "$FILE_PATH" '
     .areas | to_entries[] | select(.value.tc.file) |
@@ -132,7 +241,6 @@ if $IS_TC; then
     .key' "$STATE" 2>/dev/null)
 fi
 
-# src/ 파일 → 영역 매핑 (1:N — 공유 파일은 여러 영역에 매핑될 수 있음)
 if $IS_SRC; then
   TARGET_AREAS=$(jq -r --arg fp "$FILE_PATH" '
     .areas | to_entries[] |
@@ -141,14 +249,11 @@ if $IS_SRC; then
     .key' "$STATE" 2>/dev/null)
 fi
 
-# tests/ 파일 → 경로에서 영역 코드 추출 (tests/unit/CP/ → CP)
 if $IS_TEST; then
   TARGET_AREAS=$(echo "$FILE_PATH" | grep -oE 'tests/[^/]+/([A-Z]{2})' | grep -oE '[A-Z]{2}$' || true)
 fi
 
-# 영역을 특정할 수 없는 경우 (새 파일 등)
 if [ -z "$TARGET_AREAS" ]; then
-  # 활성 phase인 영역이 하나라도 있으면 허용
   ACTIVE=$(echo "$AREAS_JSON" | jq '[to_entries[] | select(
     .value.phase == "spec" or
     .value.phase == "tc" or
@@ -158,12 +263,21 @@ if [ -z "$TARGET_AREAS" ]; then
   if [ "$ACTIVE" -gt 0 ]; then
     exit 0
   fi
-  echo "BLOCKED: 파일을 특정 영역에 매핑할 수 없고, 활성 영역이 없습니다." >&2
-  echo "reentry 프로세스를 시작하세요." >&2
+  cat >&2 <<EOF
+BLOCKED: 이 파일은 어떤 영역에도 매핑되지 않았고, 활성 영역이 없습니다.
+
+가능한 행동:
+  → 기존 영역의 reentry 시작 (사람에게 시나리오 A/B/C 확인)
+  → 새 영역 등록 (hitl-state.json에 area 추가, phase: "spec")
+
+사람에게 이 파일이 어떤 영역에 속하는지 확인하세요.
+EOF
   exit 2
 fi
 
+# ══════════════════════════════════════════════════════════════
 # ── 모든 매칭 영역의 phase를 검사 (하나라도 차단이면 차단) ──
+# ══════════════════════════════════════════════════════════════
 BLOCKED_AREA=""
 BLOCKED_PHASE=""
 BLOCKED_CYCLE=""
@@ -203,46 +317,61 @@ for AREA in $TARGET_AREAS; do
   fi
 done
 
-# 모든 영역이 허용이면 통과
 if [ -z "$BLOCKED_AREA" ]; then
   exit 0
 fi
 
-# ── 차단: 구체적 피드백 ──
+# ══════════════════════════════════════════════════════════════
+# ── 차단: 상태 머신 기반 피드백 ──
+# ══════════════════════════════════════════════════════════════
 AREA_NAME=$(echo "$AREAS_JSON" | jq -r --arg area "$BLOCKED_AREA" '.[$area].name // $area')
+
+TRIED_PATH=""
+$IS_SRC && TRIED_PATH="src/"
+$IS_SPEC && TRIED_PATH=".omc/specs/"
+$IS_TC && TRIED_PATH=".omc/test-cases/"
+$IS_TEST && TRIED_PATH="tests/"
+
+NEEDED_PHASES=""
+$IS_SRC && NEEDED_PHASES="code 또는 test"
+$IS_SPEC && NEEDED_PHASES="spec"
+$IS_TC && NEEDED_PHASES="tc, code, 또는 test"
+$IS_TEST && NEEDED_PHASES="code 또는 test"
 
 if [ "$BLOCKED_PHASE" = "verified" ]; then
   cat >&2 <<EOF
-BLOCKED: ${BLOCKED_AREA}(${AREA_NAME}) 영역이 verified 상태입니다. [cycle ${BLOCKED_CYCLE}]
+BLOCKED: ${BLOCKED_AREA}(${AREA_NAME}) — verified [cycle ${BLOCKED_CYCLE}]
+${TRIED_PATH} 수정은 ${NEEDED_PHASES} 단계에서 가능합니다.
 
-reentry를 시작하세요. 시나리오에 따라 진입점 선택:
-  A. 새 기능 / SPEC 오류  → phase를 "spec"으로 (cycle++)
-  B. 코드 버그 (SPEC 정확) → phase를 "tc"로 (cycle++)
-  C. 테스트 코드 오류      → phase를 "code"로 (cycle++)
+사람에게 reentry 시나리오를 확인하세요:
+  A. SPEC 변경 필요  → spec  (cycle++) → /ears-spec
+  B. 코드 버그       → tc    (cycle++) → /test-gen-design
+  C. 테스트 코드 오류 → code  (cycle++) → /test-gen-code
 
-hitl-state.json의 해당 area를 변경하세요:
-  phase → 진입 phase, cycle → ${BLOCKED_CYCLE}+1,
-  cycle_entry → 진입 phase, cycle_reason → 사유
-  log에 type, reason, affected_reqs, skip_reason 기록
+reentry 시 hitl-state.json 변경:
+  phase → 진입 phase, cycle → $((BLOCKED_CYCLE + 1)),
+  cycle_entry, cycle_reason, log 기록 필수
 EOF
 else
-  echo "BLOCKED: ${BLOCKED_AREA}(${AREA_NAME}) 영역이 ${BLOCKED_PHASE} 상태입니다. [cycle ${BLOCKED_CYCLE}]" >&2
-  echo "" >&2
-  if $IS_SRC; then
-    echo "src/ 수정은 code 또는 test 단계에서만 가능합니다." >&2
-    # 공유 파일인 경우 어떤 영역이 차단 원인인지 알려줌
-    AREA_COUNT=$(echo "$TARGET_AREAS" | wc -w | tr -d ' ')
-    if [ "$AREA_COUNT" -gt 1 ]; then
-      echo "이 파일은 여러 영역에 매핑되어 있습니다: $TARGET_AREAS" >&2
-      echo "차단 원인 영역: ${BLOCKED_AREA}(${BLOCKED_PHASE})" >&2
-    fi
-  elif $IS_SPEC; then
-    echo ".omc/specs/ 수정은 spec 단계에서만 가능합니다." >&2
-  elif $IS_TC; then
-    echo ".omc/test-cases/ 수정은 tc, code, test 단계에서만 가능합니다." >&2
-  elif $IS_TEST; then
-    echo "tests/ 수정은 code 또는 test 단계에서만 가능합니다." >&2
+  cat >&2 <<EOF
+BLOCKED: ${BLOCKED_AREA}(${AREA_NAME}) — ${BLOCKED_PHASE} [cycle ${BLOCKED_CYCLE}]
+${TRIED_PATH} 수정은 ${NEEDED_PHASES} 단계에서 가능합니다.
+
+EOF
+  print_transitions "$BLOCKED_PHASE"
+
+  AREA_WORD_COUNT=$(echo "$TARGET_AREAS" | wc -w | tr -d ' ')
+  if [ "$AREA_WORD_COUNT" -gt 1 ]; then
+    cat >&2 <<EOF
+
+주의: 이 파일은 여러 영역에 매핑되어 있습니다: $TARGET_AREAS
+차단 원인: ${BLOCKED_AREA}(${BLOCKED_PHASE})
+→ 이 영역도 해당 경로를 수정할 수 있는 phase로 전환해야 합니다.
+EOF
   fi
+
+  echo "" >&2
+  echo "사람에게 진행 방향을 확인하세요." >&2
 fi
 
 exit 2

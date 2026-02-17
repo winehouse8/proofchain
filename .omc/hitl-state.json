@@ -1,9 +1,9 @@
 {
   "project": {
-    "code": "",
-    "name": "",
+    "code": "PC",
+    "name": "ProofChain Demo",
     "frameworks": {
-      "unit": "",
+      "unit": "vitest",
       "component": "",
       "e2e": "",
       "visual": ""
@@ -22,6 +22,36 @@
       }
     }
   },
-  "areas": {},
-  "log": []
+  "areas": {
+    "CA": {
+      "name": "Calculator",
+      "phase": "spec",
+      "cycle": 1,
+      "spec": {
+        "file": "SPEC-PC-CA.md",
+        "status": "draft"
+      },
+      "tc": {
+        "file": "TC-CA.json",
+        "status": "pending"
+      },
+      "code": {
+        "files": []
+      },
+      "test": {
+        "status": "pending"
+      }
+    }
+  },
+  "log": [
+    {
+      "timestamp": "2026-02-17T10:00:00Z",
+      "area": "CA",
+      "action": "area_created",
+      "phase": "spec",
+      "cycle": 1,
+      "actor": "human",
+      "reason": "E2E 프레임워크 테스트를 위한 계산기 영역 등록"
+    }
+  ]
 }
