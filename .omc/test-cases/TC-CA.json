@@ -103,6 +103,39 @@
       "given": "계산기가 초기화되어 있다",
       "when": "divide(5, 0)을 호출한다",
       "then": "에러 메시지 'Cannot divide by zero'를 반환한다"
+    },
+    {
+      "id": "TC-CA-011",
+      "title": "거듭제곱 — 기본",
+      "req": "REQ-CA-007",
+      "origin": "supplementary",
+      "added_cycle": 2,
+      "status": "active",
+      "given": "계산기가 초기화되어 있다",
+      "when": "power(2, 3)을 호출한다",
+      "then": "결과는 8이다"
+    },
+    {
+      "id": "TC-CA-012",
+      "title": "거듭제곱 — 0승",
+      "req": "REQ-CA-007",
+      "origin": "supplementary",
+      "added_cycle": 2,
+      "status": "active",
+      "given": "계산기가 초기화되어 있다",
+      "when": "power(5, 0)을 호출한다",
+      "then": "결과는 1이다"
+    },
+    {
+      "id": "TC-CA-013",
+      "title": "거듭제곱 — 음수 지수",
+      "req": ["REQ-CA-007", "REQ-CA-008"],
+      "origin": "supplementary",
+      "added_cycle": 2,
+      "status": "active",
+      "given": "계산기가 초기화되어 있다",
+      "when": "power(2, -2)를 호출한다",
+      "then": "결과는 0.25이다"
     }
   ]
 }
