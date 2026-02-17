@@ -1,0 +1,27 @@
+{
+  "project": {
+    "code": "",
+    "name": "",
+    "frameworks": {
+      "unit": "",
+      "component": "",
+      "e2e": "",
+      "visual": ""
+    },
+    "system_context": null,
+    "paths": {
+      "specs": ".omc/specs/",
+      "test_cases": ".omc/test-cases/",
+      "traceability": ".omc/traceability/",
+      "source": "src/",
+      "tests": {
+        "unit": "tests/unit/",
+        "component": "tests/component/",
+        "e2e": "tests/e2e/",
+        "visual": "tests/visual/"
+      }
+    }
+  },
+  "areas": {},
+  "log": []
+}

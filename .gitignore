@@ -1,0 +1,17 @@
+# Build & Cache
+.vite/
+dist/
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
