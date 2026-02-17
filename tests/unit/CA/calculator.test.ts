@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { add, subtract, multiply, divide } from '../../../src/calculator';
+import { add, subtract, multiply, divide, power } from '../../../src/calculator';
 
 // TC-CA-001: 덧셈 — 양수 + 양수 (REQ-CA-001)
 describe('add', () => {
@@ -52,5 +52,20 @@ describe('divide', () => {
 
   it('TC-CA-010: 0으로 나누기 → 에러 메시지', () => {
     expect(divide(5, 0)).toBe('Cannot divide by zero');
+  });
+});
+
+// TC-CA-011 ~ TC-CA-013: 거듭제곱 (REQ-CA-007, REQ-CA-008) [supplementary, cycle 2]
+describe('power', () => {
+  it('TC-CA-011: 기본 거듭제곱', () => {
+    expect(power(2, 3)).toBe(8);
+  });
+
+  it('TC-CA-012: 0승 → 1', () => {
+    expect(power(5, 0)).toBe(1);
+  });
+
+  it('TC-CA-013: 음수 지수 → 역수', () => {
+    expect(power(2, -2)).toBe(0.25);
   });
 });
