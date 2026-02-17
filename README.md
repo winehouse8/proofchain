@@ -27,13 +27,17 @@ spec ──→ tc ──→ code ──→ test ──→ verified
   └──────────────────────────────────┘
 ```
 
-| Phase | What Happens | Allowed Writes | Human Role |
-|-------|-------------|----------------|------------|
-| **spec** | Write requirements (EARS patterns) | `.omc/specs/` | Review & approve |
-| **tc** | Generate baseline test cases (isolated) | `.omc/test-cases/` | Review & approve |
-| **code** | Implement the feature | `src/`, `tests/` | Monitor |
-| **test** | Run tests, iterate on failures | `src/`, `tests/` | Review failures |
-| **verified** | Locked. All tests pass. | Nothing | Final sign-off |
+> **tc ≠ test code.** `tc` stands for **test case design** — a specification of *what* to test (given/when/then in JSON), not executable code. Actual test code is generated in the `test` phase by combining the source code + test case designs.
+
+| Phase | What Happens | Artifact | Allowed Writes | Human Role |
+|-------|-------------|----------|----------------|------------|
+| **spec** | Write requirements (EARS patterns) | `SPEC-*.md` — requirement docs | `.omc/specs/` | Review & approve |
+| **tc** | Design test cases **without seeing code** | `TC-*.json` — given/when/then specs | `.omc/test-cases/` | Review & approve |
+| **code** | Implement the feature | Source code | `src/` | Monitor |
+| **test** | Generate **test code** from source + TC, run & iterate | Executable test files | `src/`, `tests/` | Review failures |
+| **verified** | Locked. All tests pass. | — | Nothing | Final sign-off |
+
+The key insight: test case *design* (tc) is deliberately isolated from source code. This ensures tests verify the **specification**, not the implementation. Actual test *code* is only written after both the implementation and test designs exist.
 
 ### Transitions
 
@@ -67,8 +71,8 @@ It also blocks:
 | Command | Phase | What It Does |
 |---------|-------|-------------|
 | `/ears-spec` | spec | Guides EARS-pattern requirement writing |
-| `/test-gen-design` | tc | Generates baseline TCs in **isolated context** (never reads `src/`) |
-| `/test-gen-code` | code→test | Generates test code, runs tests, iterates (max 5 retries) |
+| `/test-gen-design` | tc | Designs test case specs in **isolated context** (never reads `src/`) |
+| `/test-gen-code` | test | Generates executable test code from source + TC designs, runs & iterates |
 | `/traceability` | any | Generates REQ ↔ TC ↔ Test bidirectional matrix |
 | `/reset` | any | Resets process state and artifacts |
 
@@ -135,11 +139,11 @@ DB (Database)       : verified [cycle 1] → Done. Reentry required for changes.
 You: "/ears-spec"                    ← Write requirements
 You: "Approve" → phase: tc
 
-You: "/test-gen-design"              ← Generate test cases (isolated)
-You: "Approve" → phase: code
+You: "/test-gen-design"              ← Design test cases (isolated, no code access)
+You: "Approve" → phase: code         ← TC is a test PLAN, not test code
 
-You: Implement feature               ← Write code
-You: "/test-gen-code"                ← Generate + run tests
+You: Implement feature               ← Write source code in src/
+You: "/test-gen-code"                ← Now generate real test CODE from src/ + TC
 All pass → phase: verified
 
 You: "Found a bug in DB"
