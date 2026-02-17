@@ -25,7 +25,7 @@
   "areas": {
     "CA": {
       "name": "Calculator",
-      "phase": "code",
+      "phase": "test",
       "cycle": 1,
       "spec": {
         "file": "SPEC-PC-CA.md",
@@ -36,10 +36,10 @@
         "status": "approved"
       },
       "code": {
-        "files": []
+        "files": ["src/calculator.ts"]
       },
       "test": {
-        "status": "pending"
+        "status": "in_progress"
       }
     }
   },
@@ -72,6 +72,16 @@
       "cycle": 1,
       "actor": "human",
       "reason": "TC 설계 승인 완료, 코딩 시작"
+    },
+    {
+      "timestamp": "2026-02-17T10:03:00Z",
+      "area": "CA",
+      "action": "phase_transition",
+      "from": "code",
+      "to": "test",
+      "cycle": 1,
+      "actor": "human",
+      "reason": "코딩 완료, 테스트 코드 생성 시작"
     }
   ]
 }
