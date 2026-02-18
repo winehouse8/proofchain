@@ -1,9 +1,15 @@
 #!/bin/bash
-# HITL Phase Guard — PreToolUse Hook (v2.2: Approach A + boundary fix + Bash boundary)
+# HITL Phase Guard — PreToolUse Hook (v3.1: + Hotfix light + Supplementary TC schema)
 # Gate: Phase 기반 파일 접근 제어 + 자기 보호 + 코드 확장자 검사
 # 5-Phase Model: spec, tc, code, test, verified
 # Edit/Write: 영역별 정밀 검사 + 코드 확장자 차단
 # Bash: 휴리스틱 쓰기 감지 + 코드 확장자 휴리스틱
+#
+# Layer 1 (Guard): test phase에서 src/ 수정 시 자동 backward (test→code)
+# Layer 3 (Gate): verified 전환 시 추적성 전수 검사 (차단)
+#   - @tc ↔ TC JSON 매핑 검사
+#   - Supplementary TC 필수 필드 검증 (§6.3)
+#   - Change-log 커버리지 경고 (§6.1 Hotfix light)
 #
 # Approach A: 관리 경로(src/, tests/) 외부의 코드 파일 쓰기를 차단
 #   - Edit/Write: 정확한 확장자 매칭 (file_path 기반)
@@ -60,15 +66,260 @@ TRANSITIONS
 }
 
 # ══════════════════════════════════════════════════════════════
+# ── Layer 1 Helper: Auto-backward (test→code) ──
+# ══════════════════════════════════════════════════════════════
+auto_backward() {
+  # $1 = TARGET_AREAS (space-separated, may be empty)
+  local target_areas="$1"
+  local areas_json
+  areas_json=$(jq '.areas // {}' "$STATE" 2>/dev/null) || return
+
+  local backward_areas=""
+
+  if [ -n "$target_areas" ]; then
+    for area in $target_areas; do
+      local phase
+      phase=$(echo "$areas_json" | jq -r --arg a "$area" '.[$a].phase // "unknown"') || continue
+      [ "$phase" = "test" ] && backward_areas="$backward_areas $area"
+    done
+  else
+    # unmapped src/ → test phase인 모든 area를 backward
+    backward_areas=$(echo "$areas_json" | jq -r '
+      to_entries[] | select(.value.phase == "test") | .key
+    ' 2>/dev/null) || backward_areas=""
+  fi
+
+  backward_areas=$(echo "$backward_areas" | xargs)
+  [ -z "$backward_areas" ] && return
+
+  for area in $backward_areas; do
+    local ts
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    jq --arg a "$area" --arg ts "$ts" '
+      .areas[$a].phase = "code" |
+      .log += [{
+        "timestamp": $ts,
+        "area": $a,
+        "from": "test",
+        "to": "code",
+        "actor": "hook",
+        "type": "auto-backward",
+        "note": "Auto-backward: src/ modified during test phase"
+      }]
+    ' "$STATE" > "${STATE}.tmp" && mv "${STATE}.tmp" "$STATE"
+
+    cat >&2 <<EOF
+⚠ AUTO-BACKWARD: ${area} — test → code
+  test phase에서 src/ 수정이 감지되어 자동으로 code phase로 전환했습니다.
+  수정 완료 후:
+  1. TC JSON에 supplementary TC를 추가하세요 (origin: "supplementary", added_reason 필수)
+  2. 테스트 코드에 @tc 어노테이션을 부착하세요
+  3. 테스트를 재실행하여 code → test로 복귀하세요
+EOF
+  done
+}
+
+# ══════════════════════════════════════════════════════════════
+# ── Layer 3 Helper: Verified Gate (추적성 전수 검사) ──
+# ══════════════════════════════════════════════════════════════
+verified_gate() {
+  # $1 = area key
+  local area="$1"
+  local tc_file
+  tc_file=$(jq -r --arg a "$area" '.areas[$a].tc.file // empty' "$STATE" 2>/dev/null) || return 0
+  [ -z "$tc_file" ] && return 0
+
+  local tc_path="$CWD/$tc_file"
+  [ ! -f "$tc_path" ] && return 0
+
+  # ── 검사 1: active TC ↔ @tc 매핑 ──
+  local active_tc_ids
+  active_tc_ids=$(jq -r '
+    [
+      (.baseline_tcs // [] | .[] | select(.status != "obsolete") | .tc_id),
+      (.supplementary_tcs // [] | .[] | .tc_id)
+    ] | .[]
+  ' "$tc_path" 2>/dev/null) || return 0
+
+  [ -z "$active_tc_ids" ] && return 0
+
+  # active TC의 req_id 매핑 (tc_id → req_id)
+  local tc_req_map
+  tc_req_map=$(jq -r '
+    [
+      (.baseline_tcs // [] | .[] | select(.status != "obsolete") | "\(.tc_id)|\(.req_id)"),
+      (.supplementary_tcs // [] | .[] | "\(.tc_id)|\(.req_id)")
+    ] | .[]
+  ' "$tc_path" 2>/dev/null) || tc_req_map=""
+
+  local test_dir="$CWD/tests"
+  local found_tcs=""
+  local found_reqs=""
+  if [ -d "$test_dir" ]; then
+    found_tcs=$(grep -rhoE '@tc\s+TC-[A-Z]{2}-[0-9]{3}[a-z]?' "$test_dir" 2>/dev/null | \
+      sed 's/@tc\s*//' | sort -u) || found_tcs=""
+    found_reqs=$(grep -rhoE '@req\s+REQ-[A-Z]{2}-[0-9]{3}' "$test_dir" 2>/dev/null | \
+      sed 's/@req\s*//' | sort -u) || found_reqs=""
+  fi
+
+  local missing=""
+  local missing_count=0
+  local total_count=0
+
+  while IFS= read -r tc_id; do
+    [ -z "$tc_id" ] && continue
+    total_count=$((total_count + 1))
+    if ! echo "$found_tcs" | grep -qw "$tc_id"; then
+      missing="$missing  - $tc_id (@tc 누락)"$'\n'
+      missing_count=$((missing_count + 1))
+    fi
+  done <<< "$active_tc_ids"
+
+  # @req 검사: TC에 연결된 req_id가 테스트 코드에 @req로 존재하는지
+  local req_missing=""
+  local req_missing_count=0
+  local checked_reqs=""
+
+  while IFS='|' read -r tc_id req_id; do
+    [ -z "$req_id" ] && continue
+    # 같은 req_id 중복 검사 방지
+    if echo "$checked_reqs" | grep -qw "$req_id" 2>/dev/null; then
+      continue
+    fi
+    checked_reqs="$checked_reqs $req_id"
+    if [ -n "$found_reqs" ]; then
+      if ! echo "$found_reqs" | grep -qw "$req_id"; then
+        req_missing="$req_missing  - $req_id (@req 누락 — $tc_id 에서 참조)"$'\n'
+        req_missing_count=$((req_missing_count + 1))
+      fi
+    else
+      req_missing="$req_missing  - $req_id (@req 누락 — $tc_id 에서 참조)"$'\n'
+      req_missing_count=$((req_missing_count + 1))
+    fi
+  done <<< "$tc_req_map"
+
+  if [ "$missing_count" -gt 0 ] || [ "$req_missing_count" -gt 0 ]; then
+    cat >&2 <<EOF
+BLOCKED: ${area} — verified 전환 차단 (추적성 미충족)
+EOF
+    if [ "$missing_count" -gt 0 ]; then
+      cat >&2 <<EOF
+  Active TC: ${total_count}개 중 ${missing_count}개 @tc 어노테이션 누락:
+${missing}
+EOF
+    fi
+    if [ "$req_missing_count" -gt 0 ]; then
+      cat >&2 <<EOF
+  REQ 추적: ${req_missing_count}개 @req 어노테이션 누락:
+${req_missing}
+EOF
+    fi
+    cat >&2 <<EOF
+  모든 테스트에 @tc TC-XX-NNNx 와 @req REQ-XX-NNN 주석을 추가한 후 다시 시도하세요.
+  ISO 26262 Part 6 §9.3 추적성 요구사항을 충족해야 합니다.
+EOF
+    return 1
+  fi
+
+  # ── 검사 2: Supplementary TC 스키마 검증 (§6.3) ──
+  local supp_errors=""
+  local supp_error_count=0
+  local required_fields="tc_id origin req_id type level title given when then added_reason"
+
+  local supp_count
+  supp_count=$(jq '.supplementary_tcs // [] | length' "$tc_path" 2>/dev/null) || supp_count=0
+
+  if [ "$supp_count" -gt 0 ]; then
+    local i=0
+    while [ "$i" -lt "$supp_count" ]; do
+      local tc_id_val
+      tc_id_val=$(jq -r --argjson idx "$i" '.supplementary_tcs[$idx].tc_id // "unknown"' "$tc_path" 2>/dev/null)
+
+      for field in $required_fields; do
+        local val
+        val=$(jq -r --argjson idx "$i" --arg f "$field" '.supplementary_tcs[$idx][$f] // empty' "$tc_path" 2>/dev/null)
+        if [ -z "$val" ]; then
+          supp_errors="$supp_errors  - ${tc_id_val}: \"${field}\" 필드 누락"$'\n'
+          supp_error_count=$((supp_error_count + 1))
+        elif [ "$field" = "added_reason" ] && [ "${#val}" -lt 10 ]; then
+          supp_errors="$supp_errors  - ${tc_id_val}: \"added_reason\" 최소 10자 필요 (현재: ${#val}자)"$'\n'
+          supp_error_count=$((supp_error_count + 1))
+        fi
+      done
+
+      # origin must be "supplementary"
+      local origin_val
+      origin_val=$(jq -r --argjson idx "$i" '.supplementary_tcs[$idx].origin // empty' "$tc_path" 2>/dev/null)
+      if [ -n "$origin_val" ] && [ "$origin_val" != "supplementary" ]; then
+        supp_errors="$supp_errors  - ${tc_id_val}: origin은 \"supplementary\"여야 함 (현재: \"${origin_val}\")"$'\n'
+        supp_error_count=$((supp_error_count + 1))
+      fi
+
+      i=$((i + 1))
+    done
+  fi
+
+  if [ "$supp_error_count" -gt 0 ]; then
+    cat >&2 <<EOF
+BLOCKED: ${area} — verified 전환 차단 (Supplementary TC 스키마 오류)
+  ${supp_error_count}개 필드 문제:
+${supp_errors}
+  필수 필드: tc_id, origin("supplementary"), req_id, type, level,
+             title, given, when, then, added_reason
+EOF
+    return 1
+  fi
+
+  # ── 검사 3: Change-log 커버리지 경고 (§6.1 Hotfix light) ──
+  # 차단 안 함 — 경고만
+  local change_log="$CWD/.omc/change-log.jsonl"
+  if [ -f "$change_log" ]; then
+    # unmapped src/ 변경 경고
+    local unmapped_files
+    unmapped_files=$(grep '"area":"unmapped"' "$change_log" 2>/dev/null | \
+      jq -r '.file' 2>/dev/null | sort -u) || unmapped_files=""
+
+    if [ -n "$unmapped_files" ]; then
+      cat >&2 <<EOF
+⚠ COVERAGE WARNING: ${area} — 영역 미매핑 src/ 변경 감지
+  다음 파일이 어떤 영역에도 매핑되지 않은 채 수정되었습니다:
+EOF
+      echo "$unmapped_files" | while IFS= read -r f; do
+        [ -n "$f" ] && echo "  - $f" >&2
+      done
+      echo "  hitl-state.json의 code.files에 파일을 등록하면 추적성이 향상됩니다." >&2
+    fi
+
+    # auto-backward 이력이 있는 area: supplementary TC 존재 여부 경고
+    local has_autobackward
+    has_autobackward=$(jq --arg a "$area" '
+      [.log // [] | .[] | select(.area == $a and .type == "auto-backward")] | length
+    ' "$STATE" 2>/dev/null) || has_autobackward=0
+
+    if [ "$has_autobackward" -gt 0 ] && [ "$supp_count" -eq 0 ]; then
+      cat >&2 <<EOF
+⚠ HOTFIX WARNING: ${area} — auto-backward 이력 ${has_autobackward}건 있으나 supplementary TC 없음
+  test phase에서 코드 수정이 발생했으므로 보완 TC 추가를 권장합니다.
+  TC JSON에 origin: "supplementary", added_reason 필드와 함께 추가하세요.
+EOF
+    fi
+  fi
+
+  return 0
+}
+
+# ══════════════════════════════════════════════════════════════
 # ── Bash 도구: .claude/ 조작 차단 + 보호 경로 쓰기 감지 ──
 # ══════════════════════════════════════════════════════════════
 if [ "$TOOL" = "Bash" ]; then
   CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
-  # .claude/ 보호
-  if echo "$CMD" | grep -qE '\.claude/'; then
-    echo "BLOCKED: .claude/ 디렉토리 조작이 차단되었습니다." >&2
-    echo "HITL 훅과 스킬 설정은 보호됩니다." >&2
+  # .claude/ 보호 — 쓰기 연산만 차단 (git/읽기 명령 허용)
+  if echo "$CMD" | grep -qE '\.claude/' && \
+      echo "$CMD" | grep -qE '(sed\s.*-i|\btee\b|>[^&]|>>|\b(cp|mv|rm|mkdir|chmod|chown|install)\b)'; then
+    echo "BLOCKED: .claude/ 디렉토리 쓰기가 차단되었습니다." >&2
+    echo "HITL 훅과 스킬 설정은 보호됩니다. 읽기/VCS 명령은 허용됩니다." >&2
     exit 2
   fi
 
@@ -108,6 +359,11 @@ if [ "$TOOL" = "Bash" ]; then
       if $BASH_TEST && [ -z "$BLOCKED_PATH" ]; then
         CNT=$(echo "$AREAS_JSON" | jq '[to_entries[] | select(.value.phase == "code" or .value.phase == "test")] | length')
         [ "$CNT" = "0" ] && BLOCKED_PATH="tests/"
+      fi
+
+      # ── Layer 1: Bash에서 src/ 쓰기 + test phase → auto-backward ──
+      if $BASH_SRC && [ -z "$BLOCKED_PATH" ]; then
+        auto_backward ""
       fi
 
       if [ -n "$BLOCKED_PATH" ]; then
@@ -176,6 +432,50 @@ esac
 
 # ── hitl-state.json이 없으면 통과 ──
 [ ! -f "$STATE" ] && exit 0
+
+# ══════════════════════════════════════════════════════════════
+# ── Layer 3: hitl-state.json에 verified 전환 시 추적성 검사 ──
+# ══════════════════════════════════════════════════════════════
+case "$FILE_PATH" in
+  */.omc/hitl-state.json)
+    # Write tool: 새 JSON에서 verified 전환 area 식별
+    if [ "$TOOL" = "Write" ]; then
+      NEW_CONTENT=$(echo "$INPUT" | jq -r '.tool_input.content // empty')
+      if [ -n "$NEW_CONTENT" ]; then
+        # 새 JSON에서 verified phase인 area 찾기
+        NEW_VERIFIED=$(echo "$NEW_CONTENT" | jq -r '
+          .areas // {} | to_entries[] | select(.value.phase == "verified") | .key
+        ' 2>/dev/null) || NEW_VERIFIED=""
+
+        for area in $NEW_VERIFIED; do
+          # 현재 state에서 이 area가 verified가 아니면 → 전환 중
+          CUR_PHASE=$(jq -r --arg a "$area" '.areas[$a].phase // "unknown"' "$STATE" 2>/dev/null) || CUR_PHASE="unknown"
+          if [ "$CUR_PHASE" != "verified" ]; then
+            if ! verified_gate "$area"; then
+              exit 2
+            fi
+          fi
+        done
+      fi
+    fi
+
+    # Edit tool: new_string에 "verified" 포함 시 검사
+    if [ "$TOOL" = "Edit" ]; then
+      NEW_STRING=$(echo "$INPUT" | jq -r '.tool_input.new_string // empty')
+      if echo "$NEW_STRING" | grep -q '"verified"'; then
+        # test phase인 area들 검사
+        TEST_AREAS=$(jq -r '.areas | to_entries[] | select(.value.phase == "test") | .key' "$STATE" 2>/dev/null) || TEST_AREAS=""
+        for area in $TEST_AREAS; do
+          if ! verified_gate "$area"; then
+            exit 2
+          fi
+        done
+      fi
+    fi
+
+    exit 0
+    ;;
+esac
 
 # ── 보호 대상 판별 ──
 IS_SRC=false
@@ -269,6 +569,10 @@ if [ -z "$TARGET_AREAS" ]; then
     .value.phase == "test"
   )] | length')
   if [ "$ACTIVE" -gt 0 ]; then
+    # ── Layer 1: unmapped src/ + test phase → auto-backward ──
+    if $IS_SRC; then
+      auto_backward ""
+    fi
     exit 0
   fi
   cat >&2 <<EOF
@@ -326,6 +630,10 @@ for AREA in $TARGET_AREAS; do
 done
 
 if [ -z "$BLOCKED_AREA" ]; then
+  # ── Layer 1: mapped src/ + test phase → auto-backward ──
+  if $IS_SRC; then
+    auto_backward "$TARGET_AREAS"
+  fi
   exit 0
 fi
 

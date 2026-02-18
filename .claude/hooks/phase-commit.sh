@@ -1,7 +1,9 @@
 #!/bin/bash
-# Phase Commit — PostToolUse Hook
+# Phase Commit — PostToolUse Hook (v2.2: + Layer 1 전환 유효성 + verified /traceability 안내)
 # Detects phase transitions in hitl-state.json and auto-commits
 # with structured messages. Creates git tags at verified milestones.
+# Layer 1: 허용된 전환 맵 검증 (경고만, 차단 불가)
+# §6.4: verified 전환 시 /traceability 실행 권장 안내
 #
 # Fires on every Edit/Write but exits immediately for non-hitl-state.json files.
 # PostToolUse cannot block — exit 0 always.
@@ -72,6 +74,46 @@ while IFS='|' read -r area phase cycle name; do
   fi
 done <<< "$CURRENT"
 
+# ══════════════════════════════════════════════════════════════
+# ── Layer 1: 전환 유효성 검증 (경고만) ──
+# ══════════════════════════════════════════════════════════════
+validate_transition() {
+  local from="$1" to="$2"
+
+  # (init)→any 항상 허용
+  [ "$from" = "(init)" ] && return 0
+
+  # any→obsolete 항상 허용
+  [ "$to" = "obsolete" ] && return 0
+
+  case "$from" in
+    spec)     echo "tc" ;;
+    tc)       echo "code spec" ;;
+    code)     echo "test tc spec" ;;
+    test)     echo "verified code tc spec" ;;
+    verified) echo "spec tc code" ;;
+    *)        echo "" ;;
+  esac | grep -qw "$to"
+}
+
+for t in "${TRANSITIONS[@]}"; do
+  IFS='|' read -r area name from to cycle <<< "$t"
+  if ! validate_transition "$from" "$to"; then
+    cat >&2 <<EOF
+⚠ INVALID TRANSITION: ${area}(${name}): ${from} → ${to}
+  허용된 전환: $(case "$from" in
+    spec) echo "spec → tc" ;;
+    tc) echo "tc → code, spec" ;;
+    code) echo "code → test, tc, spec" ;;
+    test) echo "test → verified, code, tc, spec" ;;
+    verified) echo "verified → spec, tc, code" ;;
+    *) echo "(unknown)" ;;
+  esac)
+  이 전환이 의도된 것인지 확인하세요.
+EOF
+  fi
+done
+
 # 전환 없음
 if [ ${#TRANSITIONS[@]} -eq 0 ]; then
   cp "$STATE" "$SNAPSHOT"
@@ -122,6 +164,17 @@ if [ ${#TAG_LIST[@]} -gt 0 ]; then
     git -C "$CWD" tag "$tag" 2>/dev/null || true
   done
   echo "[proofchain] Tags: ${TAG_LIST[*]}" >&2
+
+  # ── §6.4: verified 시 /traceability 안내 ──
+  for t in "${TRANSITIONS[@]}"; do
+    IFS='|' read -r area name from to cycle <<< "$t"
+    if [ "$to" = "verified" ]; then
+      cat >&2 <<EOF
+[proofchain] ${area} verified — /traceability 실행을 권장합니다.
+  추적성 매트릭스로 REQ↔TC↔test 완전성을 확인하세요.
+EOF
+    fi
+  done
 fi
 
 # ── 스냅샷 갱신 ──

@@ -18,6 +18,14 @@
           {
             "type": "command",
             "command": ".claude/hooks/phase-commit.sh"
+          },
+          {
+            "type": "command",
+            "command": ".claude/hooks/trace-change.sh"
+          },
+          {
+            "type": "command", 
+            "command": ".claude/hooks/artifact-commit.sh"
           }
         ]
       }
