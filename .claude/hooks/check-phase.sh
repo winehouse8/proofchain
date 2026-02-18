@@ -1,5 +1,5 @@
 #!/bin/bash
-# HITL Phase Guard — PreToolUse Hook (v3.1: + Hotfix light + Supplementary TC schema)
+# HITL Phase Guard — PreToolUse Hook (v3.3: + Reentry 로그 필드 검증)
 # Gate: Phase 기반 파일 접근 제어 + 자기 보호 + 코드 확장자 검사
 # 5-Phase Model: spec, tc, code, test, verified
 # Edit/Write: 영역별 정밀 검사 + 코드 확장자 차단
@@ -10,6 +10,8 @@
 #   - @tc ↔ TC JSON 매핑 검사
 #   - Supplementary TC 필수 필드 검증 (§6.3)
 #   - Change-log 커버리지 경고 (§6.1 Hotfix light)
+#   - Baseline TC 내용 불변 검증 (git tag 비교, cycle > 1)
+#   - Reentry 로그 필수 필드 검증 (§8.4.1, §8.7, cycle > 1)
 #
 # Approach A: 관리 경로(src/, tests/) 외부의 코드 파일 쓰기를 차단
 #   - Edit/Write: 정확한 확장자 매칭 (file_path 기반)
@@ -303,6 +305,139 @@ EOF
   test phase에서 코드 수정이 발생했으므로 보완 TC 추가를 권장합니다.
   TC JSON에 origin: "supplementary", added_reason 필드와 함께 추가하세요.
 EOF
+    fi
+  fi
+
+  # ── 검사 4: Baseline TC 내용 불변 (git tag 비교, cycle > 1) ──
+  local first_tag="${area}-verified-c1"
+  if git -C "$CWD" rev-parse "$first_tag" >/dev/null 2>&1; then
+    # 첫 verified 태그가 존재 = cycle > 1
+    local original_tc_json
+    original_tc_json=$(git -C "$CWD" show "${first_tag}:${tc_file}" 2>/dev/null) || original_tc_json=""
+
+    if [ -n "$original_tc_json" ]; then
+      local original_baselines
+      original_baselines=$(echo "$original_tc_json" | jq -r '
+        .baseline_tcs // [] | .[] | .tc_id
+      ' 2>/dev/null) || original_baselines=""
+
+      if [ -n "$original_baselines" ]; then
+        local baseline_errors=""
+        local baseline_error_count=0
+
+        while IFS= read -r orig_id; do
+          [ -z "$orig_id" ] && continue
+
+          # 현재 JSON에서 이 TC 찾기
+          local cur_status
+          cur_status=$(jq -r --arg id "$orig_id" '
+            .baseline_tcs // [] | .[] | select(.tc_id == $id) | .status // "active"
+          ' "$tc_path" 2>/dev/null) || cur_status=""
+
+          if [ -z "$cur_status" ]; then
+            baseline_errors="${baseline_errors}  - ${orig_id}: TC JSON에서 삭제됨 (삭제 금지, obsolete 마킹 필요)\n"
+            baseline_error_count=$((baseline_error_count + 1))
+            continue
+          fi
+
+          # obsolete면 내용 변경 상관없음
+          [ "$cur_status" = "obsolete" ] && continue
+
+          # given/when/then 비교
+          local orig_gwt cur_gwt
+          orig_gwt=$(echo "$original_tc_json" | jq -r --arg id "$orig_id" '
+            .baseline_tcs[] | select(.tc_id == $id) |
+            (.given // "") + "|||" + (.when // "") + "|||" + (.then // "")
+          ' 2>/dev/null) || continue
+          cur_gwt=$(jq -r --arg id "$orig_id" '
+            .baseline_tcs[] | select(.tc_id == $id) |
+            (.given // "") + "|||" + (.when // "") + "|||" + (.then // "")
+          ' "$tc_path" 2>/dev/null) || continue
+
+          if [ "$orig_gwt" != "$cur_gwt" ]; then
+            baseline_errors="${baseline_errors}  - ${orig_id}: given/when/then 내용이 변경됨\n"
+            baseline_error_count=$((baseline_error_count + 1))
+          fi
+        done <<< "$original_baselines"
+
+        if [ "$baseline_error_count" -gt 0 ]; then
+          cat >&2 <<EOF
+BLOCKED: ${area} — verified 전환 차단 (Baseline TC 불변 위반)
+  ${baseline_error_count}개 baseline TC 문제:
+$(printf "$baseline_errors")
+  Baseline TC의 given/when/then은 최초 verified 이후 수정할 수 없습니다.
+  변경이 필요하면: status를 "obsolete"로 마킹 + supplementary TC 생성
+  불변 규칙 #1 (ISO 26262 Part 8 §7.4.3)
+EOF
+          return 1
+        fi
+      fi
+    fi
+  fi
+
+  # ── 검사 5: Reentry 로그 필수 필드 검증 (§8.4.1, §8.7, cycle > 1) ──
+  local area_cycle
+  area_cycle=$(jq -r --arg a "$area" '.areas[$a].cycle // 1' "$STATE" 2>/dev/null) || area_cycle=1
+
+  if [ "$area_cycle" -gt 1 ]; then
+    # 가장 최근의 reentry 로그 항목 찾기 (from=="verified" 또는 type=="reentry")
+    local reentry_entry
+    reentry_entry=$(jq --arg a "$area" '
+      [.log // [] | .[] | select(.area == $a and (.from == "verified" or .type == "reentry"))] | last
+    ' "$STATE" 2>/dev/null) || reentry_entry="null"
+
+    if [ "$reentry_entry" = "null" ] || [ -z "$reentry_entry" ]; then
+      cat >&2 <<EOF
+BLOCKED: ${area} — verified 전환 차단 (Reentry 로그 부재)
+  cycle ${area_cycle}이지만 reentry 로그 항목이 없습니다.
+  Reentry 시 hitl-state.json의 log 배열에 다음 필드를 기록하세요:
+    type, reason, affected_reqs
+  단계를 건너뛰었다면: skipped_phases, skip_reason
+  ISO 26262 Part 8 §8.4.1 (변경 요청), §8.7 (단계 생략 근거)
+EOF
+      return 1
+    fi
+
+    local log_errors=""
+    local log_error_count=0
+
+    # type, reason, affected_reqs 필수 필드 검사
+    for field in type reason affected_reqs; do
+      local val
+      val=$(echo "$reentry_entry" | jq -r --arg f "$field" '.[$f] // empty' 2>/dev/null)
+      if [ -z "$val" ]; then
+        log_errors="${log_errors}  - \"${field}\" 필드 누락\n"
+        log_error_count=$((log_error_count + 1))
+      fi
+    done
+
+    # skipped_phases가 있으면 skip_reason 필수 (§8.7)
+    local skipped
+    skipped=$(echo "$reentry_entry" | jq -r '
+      if .skipped_phases then
+        (.skipped_phases | if type == "array" then join(", ") else tostring end)
+      else empty end
+    ' 2>/dev/null) || skipped=""
+
+    if [ -n "$skipped" ]; then
+      local skip_reason_val
+      skip_reason_val=$(echo "$reentry_entry" | jq -r '.skip_reason // empty' 2>/dev/null)
+      if [ -z "$skip_reason_val" ]; then
+        log_errors="${log_errors}  - \"skip_reason\" 필드 누락 (skipped_phases: ${skipped})\n"
+        log_error_count=$((log_error_count + 1))
+      fi
+    fi
+
+    if [ "$log_error_count" -gt 0 ]; then
+      cat >&2 <<EOF
+BLOCKED: ${area} — verified 전환 차단 (Reentry 로그 불완전)
+  cycle ${area_cycle} reentry 로그에 ${log_error_count}개 필수 필드 누락:
+$(printf "$log_errors")
+  Reentry 시 log에 type, reason, affected_reqs 필드가 필수입니다.
+  단계를 건너뛰었다면 skipped_phases + skip_reason도 필수입니다.
+  ISO 26262 Part 8 §8.4.1 (변경 요청), §8.7 (단계 생략 근거)
+EOF
+      return 1
     fi
   fi
 
