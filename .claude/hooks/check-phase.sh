@@ -1,5 +1,5 @@
 #!/bin/bash
-# HITL Phase Guard — PreToolUse Hook (v3.3: + Reentry 로그 필드 검증)
+# HITL Phase Guard — PreToolUse Hook (v3.3.1: + git 명령 .claude/ 오탐 수정)
 # Gate: Phase 기반 파일 접근 제어 + 자기 보호 + 코드 확장자 검사
 # 5-Phase Model: spec, tc, code, test, verified
 # Edit/Write: 영역별 정밀 검사 + 코드 확장자 차단
@@ -450,8 +450,11 @@ EOF
 if [ "$TOOL" = "Bash" ]; then
   CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
-  # .claude/ 보호 — 쓰기 연산만 차단 (git/읽기 명령 허용)
+  # .claude/ 보호 — 쓰기 연산만 차단 (git 명령 허용)
+  # git 명령은 VCS 작업이므로 .claude/ 파일 쓰기가 아님.
+  # 커밋 메시지 안의 >, cp 등이 쓰기 패턴으로 오탐되는 것을 방지.
   if echo "$CMD" | grep -qE '\.claude/' && \
+      ! echo "$CMD" | grep -qE '^\s*git\s' && \
       echo "$CMD" | grep -qE '(sed\s.*-i|\btee\b|>[^&]|>>|\b(cp|mv|rm|mkdir|chmod|chown|install)\b)'; then
     echo "BLOCKED: .claude/ 디렉토리 쓰기가 차단되었습니다." >&2
     echo "HITL 훅과 스킬 설정은 보호됩니다. 읽기/VCS 명령은 허용됩니다." >&2
