@@ -38,11 +38,11 @@
 
 | # | 주장 | 문서 위치 | 코드 상태 | 심각도 | 목표 영향 |
 |---|------|----------|----------|--------|----------|
-| **C1** | Baseline TC 내용(given/when/then) 불변 강제 | CLAUDE.md L71, HITL.md L120 | **미구현** — hook 수준 검증 없음 | **High** | G2, G3 |
+| **C1** | Baseline TC 내용(given/when/then) 불변 강제 | CLAUDE.md L71, HITL.md L120 | **구현 완료** — verified gate Check 4 (git tag 비교, v3.2) | ~~High~~ **Resolved** | G2, G3 |
 | **C2** | 5회 실패 에스컬레이션 | CLAUDE.md L75 | **hook 미구현** — 스킬(/test-gen-code) 수준에서만 처리 | Low | G1 |
 | **C3** | TC 격리 (src/ Read 차단) | CLAUDE.md L73 | **기술적 불가** — 운영 요건으로 문서화됨 | Medium | G2 |
 
-**C1은 가장 큰 컨플릭트**: 3개 문서 모두 "baseline TC 불변"을 명시하지만, 실제로 누군가 TC JSON의 baseline given/when/then을 수정하면 **아무 hook도 탐지하지 않고 verified까지 통과**할 수 있음. git diff로 사후 감사는 가능하나, 이는 "기계적 강제"가 아닌 "인간 감사" 의존.
+**C1은 v3.2에서 해소됨**: verified gate Check 4가 `{area}-verified-c1` git tag의 TC JSON과 현재 TC JSON을 비교하여 baseline TC의 given/when/then 변경 및 삭제를 기계적으로 차단함. obsolete 마킹은 허용.
 
 ### 1.3 코드와 문서의 불일치 (Discrepancies)
 
@@ -50,7 +50,7 @@
 |---|------|------|------|--------|
 | **D1** | .claude/ 보호 범위 | README.md L65: "modifications" (전체 수정 차단처럼 서술) | check-phase.sh L319-323: **쓰기 연산만** 차단 (v2.1에서 변경) | **Medium** |
 | **D2** | verified gate 차단 항목 수 | README.md에서 4단계(Check 1-4)로 서술 | check-phase.sh에서 실제 5종 검사 (obsolete 필터링 + hotfix 경고 포함) | Low |
-| **D3** | 강제 메커니즘 수 | README.md L285: "14 hard blocks" | check-phase.sh 실제 카운트: 14 (정확) — 단 v2.1 .claude/ 변경으로 범위가 좁아짐 | Low |
+| **D3** | 강제 메커니즘 수 | README.md: "15 hard blocks" | check-phase.sh 실제 카운트: 15 (정확, v3.2 Check 4 추가) | - |
 | **D4** | auto-mutation 수 | README.md L286: "5 auto state changes" | 실제 5건 (정확) | - |
 
 **D1이 가장 중요**: README.md가 `.claude/ modifications` — the framework protects itself from AI tampering"이라고 서술하지만, 실제로는 쓰기만 차단하고 git 읽기는 허용됨. 사용자가 오해할 수 있음.
@@ -93,9 +93,9 @@ X1: HITL.md는 프로세스 정의 문서이므로 /frontend-design 미언급은
 | §8.7 단계 생략 근거 | skip_reason 필수 | "skip_reason mandatory" | ✅ | **충족** (프로세스) |
 | §9.4.3 검증 독립성 | **미강제** (Read 차단 불가) | "운영 요건으로 충족" | ⚠️ | **부분 충족** (문서화됨) |
 | §9.4.6 회귀 테스트 | cycle > 1 전체 회귀 | "full regression mandatory" | ✅ | **충족** (스킬) |
-| **Baseline TC 불변** | **미강제** | **"절대 수정 금지"** | **❌** | **미충족 (컨플릭트)** |
+| **Baseline TC 불변** | **강제 (v3.2 Check 4)** | **"절대 수정 금지"** | **✅** | **충족 (git tag 비교)** |
 
-**G2 판정: 대부분 달성, C1(Baseline TC 불변) 컨플릭트 해소 필요.**
+**G2 판정: 달성.** C1(Baseline TC 불변)은 v3.2 Check 4로 해소됨.
 
 ### G3: Reentry 히스토리
 
@@ -108,9 +108,9 @@ X1: HITL.md는 프로세스 정의 문서이므로 /frontend-design 미언급은
 | fix-loop (test→code→test) | phase-commit at auto_backward + 복귀 | ✅ 매 전환 커밋 | ✅ 서술됨 | ✅ |
 | 전체 회귀 | 스킬이 실행 | ✅ Amendment Mode | ✅ 서술됨 | ✅ |
 | verified (cycle 2) | phase-commit + git tag `AU-verified-c2` | ✅ 태그 생성 | ✅ 서술됨 | ✅ |
-| **Baseline TC 수정 감지** | **git diff로만 가능** | **❌ hook 미탐지** | **"절대 금지"라고 서술** | **❌** |
+| **Baseline TC 수정 감지** | **verified gate Check 4** | **✅ hook 탐지 (v3.2)** | **"절대 금지"라고 서술** | **✅** |
 
-**G3 판정: 대부분 달성, C1 동일 컨플릭트.** Reentry 전체 과정의 git 이력은 빈틈없이 기록됨. 유일한 약점은 baseline TC 내용 변경이 기계적으로 탐지되지 않는 것.
+**G3 판정: 완전 달성.** Reentry 전체 과정의 git 이력은 빈틈없이 기록되며, baseline TC 내용 변경도 v3.2 Check 4로 기계적으로 탐지됨.
 
 ---
 
@@ -124,11 +124,11 @@ X1: HITL.md는 프로세스 정의 문서이므로 /frontend-design 미언급은
 | **F2** | U2: added_reason 최소 10자 규칙 | supplementary TC 요구사항에 10자 규칙 명시 | CLAUDE.md, README.md |
 | **F3** | U5: tests 디렉토리 area 매핑 규약 | `tests/{type}/{AREA_CODE}/` 패턴 명시 | README.md Project Structure |
 
-### 코드 개선 (선택)
+### 코드 개선 (완료)
 
-| # | 항목 | 구현 방법 | 난이도 | 효과 |
-|---|------|----------|--------|------|
-| **F4** | C1: Baseline TC 내용 불변 강제 | verified gate에서 baseline given/when/then SHA256 비교 | 중간 | G2+G3 완전 달성 |
+| # | 항목 | 구현 방법 | 상태 | 효과 |
+|---|------|----------|------|------|
+| **F4** | C1: Baseline TC 내용 불변 강제 | verified gate Check 4 — git tag 비교로 given/when/then 불변 검증 | **완료 (v3.2)** | G2+G3 완전 달성 |
 
 ### 의도적 수용 (변경 불필요)
 
@@ -144,8 +144,8 @@ X1: HITL.md는 프로세스 정의 문서이므로 /frontend-design 미언급은
 ## 4. 해소 후 예상 상태
 
 ```
-              현재                  F1-F3 수정 후        F4 구현 후
-              ────                  ──────────          ──────────
+              F1-F3 수정 전          F1-F3 수정 후        F4 구현 후 (현재, v3.2)
+              ──────────            ──────────          ──────────────────────
 G1 자연스러움  ████████████████████  ████████████████████  ████████████████████
               달성                  달성                  달성
 
@@ -163,8 +163,8 @@ G3 히스토리   ████████████████████  
 
 ## 5. 종합
 
-**코드와 문서 사이의 실질적 컨플릭트는 1건**(C1: Baseline TC 불변 미강제)이며, 이것이 3대 목표 중 G2(ISO)와 G3(히스토리) 모두에 영향.
+**v3.2 업데이트로 유일한 실질 컨플릭트(C1: Baseline TC 불변 미강제)가 해소됨.** verified gate Check 4가 git tag 기반으로 baseline TC given/when/then 불변을 기계적으로 강제하여 G2(ISO)와 G3(히스토리) 모두 완전 달성.
 
-나머지는 서술 정밀도 문제(D1, U2, U5)로, 문서 수정만으로 해소 가능.
+서술 정밀도 문제(D1, U2, U5)는 F1-F3으로 문서 수정 완료.
 
 프레임워크의 핵심 가치인 **"평소에는 추적하고, 관문에서 막는다"** 원칙은 코드와 문서가 완전히 일치하며, 실제 강제 메커니즘 31건이 모두 정상 등록/동작함.

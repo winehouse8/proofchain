@@ -108,7 +108,9 @@ Claude sets phase to "verified"
   → Check 1: Every active TC → has @tc annotation in tests? → BLOCK if missing
   → Check 2: Every REQ → has @req annotation in tests? → BLOCK if missing
   → Check 3: Supplementary TC schema valid? → BLOCK if invalid
-  → Check 4: Unmapped files in change-log? → WARN (non-blocking)
+  → Check 4: Baseline TC given/when/then unchanged since first verified? → BLOCK if modified (cycle > 1)
+  → Check 5: Reentry log has type, reason, affected_reqs? → BLOCK if missing (cycle > 1)
+  → Check 6: Unmapped files in change-log? → WARN (non-blocking)
   → All pass → verified. Git tag created.
 ```
 
@@ -313,7 +315,7 @@ CLAUDE.md                       AI guide prompt (loaded every session)
 
 | Category | Count | Examples |
 |----------|-------|---------|
-| **Hard blocks** | 14 | Verified lock, phase access control, code path enforcement, .claude/ write protection |
+| **Hard blocks** | 16 | Verified lock, phase access control, code path enforcement, .claude/ write protection, baseline TC immutability, reentry log validation |
 | **Auto state changes** | 5 | auto_backward, phase commit, verified tag, change-log, artifact commit |
 | **Warnings** | 9 | @tc/@req annotation gaps, phantom TC references, unmapped files, invalid transitions |
 | **Awareness** | 3 | Session start report, pre-compact checkpoint, artifact commit confirmation |
