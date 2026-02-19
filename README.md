@@ -110,7 +110,9 @@ Claude sets phase to "verified"
   → Check 3: Supplementary TC schema valid? → BLOCK if invalid
   → Check 4: Baseline TC given/when/then unchanged since first verified? → BLOCK if modified (cycle > 1)
   → Check 5: Reentry log has type, reason, affected_reqs? → BLOCK if missing (cycle > 1)
-  → Check 6: Unmapped files in change-log? → WARN (non-blocking)
+  → Check 6: Active TC count > 0? → BLOCK if no active TCs exist
+  → Check 7: Phase transition valid? → BLOCK if transition not in allowed map
+  → Check 8: Unmapped files in change-log? → WARN (non-blocking)
   → All pass → verified. Git tag created.
 ```
 
@@ -299,6 +301,8 @@ CLAUDE.md                       AI guide prompt (loaded every session)
 8. **Code Path Enforcement** — Product code must live in managed paths (`src/`, `tests/`). Code files outside are blocked.
 9. **Test Directory Convention** — Test files must follow `tests/{type}/{AREA_CODE}/` pattern (e.g., `tests/unit/AU/auth.test.ts`) for automatic area mapping.
 10. **Audit Trail** — Every transition logged with timestamp, actor, reason, and affected requirements.
+11. **Destructive Git Blocking** — `git tag -d`, `git checkout .claude/`, `git reset --hard`, and `git push --force` are blocked to protect verified tags and hook integrity.
+12. **Phase Transition Validation** — Only valid state machine transitions are allowed (Forward, Backward, Reentry). Reentry from `verified` requires cycle increment.
 
 ## ISO 26262 Alignment
 
@@ -315,7 +319,7 @@ CLAUDE.md                       AI guide prompt (loaded every session)
 
 | Category | Count | Examples |
 |----------|-------|---------|
-| **Hard blocks** | 16 | Verified lock, phase access control, code path enforcement, .claude/ write protection, baseline TC immutability, reentry log validation |
+| **Hard blocks** | 22 | Verified lock, phase access control, code path enforcement, .claude/ write protection, baseline TC immutability, reentry log validation, destructive git blocking, phase transition validation, TC existence check |
 | **Auto state changes** | 5 | auto_backward, phase commit, verified tag, change-log, artifact commit |
 | **Warnings** | 9 | @tc/@req annotation gaps, phantom TC references, unmapped files, invalid transitions |
 | **Awareness** | 3 | Session start report, pre-compact checkpoint, artifact commit confirmation |
