@@ -1,17 +1,24 @@
 #!/bin/bash
-# HITL Phase Guard — PreToolUse Hook (v3.3.1: + git 명령 .claude/ 오탐 수정)
+# HITL Phase Guard — PreToolUse Hook (v3.4: + 파괴적 git 차단 + 전환 유효성 + TC 존재 검증)
 # Gate: Phase 기반 파일 접근 제어 + 자기 보호 + 코드 확장자 검사
 # 5-Phase Model: spec, tc, code, test, verified
 # Edit/Write: 영역별 정밀 검사 + 코드 확장자 차단
-# Bash: 휴리스틱 쓰기 감지 + 코드 확장자 휴리스틱
+# Bash: 휴리스틱 쓰기 감지 + 코드 확장자 휴리스틱 + 파괴적 git 차단
 #
 # Layer 1 (Guard): test phase에서 src/ 수정 시 자동 backward (test→code)
 # Layer 3 (Gate): verified 전환 시 추적성 전수 검사 (차단)
-#   - @tc ↔ TC JSON 매핑 검사
-#   - Supplementary TC 필수 필드 검증 (§6.3)
-#   - Change-log 커버리지 경고 (§6.1 Hotfix light)
-#   - Baseline TC 내용 불변 검증 (git tag 비교, cycle > 1)
-#   - Reentry 로그 필수 필드 검증 (§8.4.1, §8.7, cycle > 1)
+#   - Check 1: @tc ↔ TC JSON 매핑 검사
+#   - Check 2: Supplementary TC 필수 필드 검증 (§6.3)
+#   - Check 3: Change-log 커버리지 경고 (§6.1 Hotfix light)
+#   - Check 4: Baseline TC 내용 불변 검증 (git tag 비교, cycle > 1)
+#   - Check 5: Reentry 로그 필수 필드 검증 (§8.4.1, §8.7, cycle > 1)
+#   - Check 6: Active TC 존재 검증 (TC 0개 → 차단)
+# Layer 3 (Gate): hitl-state.json 전환 유효성 검사
+#   - Phase 전환 맵 검증 (Forward/Backward/Reentry)
+#   - Reentry cycle++ 검증
+# Bash (Guard): 파괴적 git 명령 차단
+#   - git tag -d/--delete, git checkout/restore .claude/
+#   - git reset --hard, git push --force/-f
 #
 # Approach A: 관리 경로(src/, tests/) 외부의 코드 파일 쓰기를 차단
 #   - Edit/Write: 정확한 확장자 매칭 (file_path 기반)
@@ -144,7 +151,17 @@ verified_gate() {
     ] | .[]
   ' "$tc_path" 2>/dev/null) || return 0
 
-  [ -z "$active_tc_ids" ] && return 0
+  # ── 검사 6: Active TC 존재 검증 (T1-3) ──
+  if [ -z "$active_tc_ids" ]; then
+    cat >&2 <<EOF
+BLOCKED: ${area} — verified 전환 차단 (Active TC 0개)
+  TC JSON에 active TC가 없습니다.
+  최소 1개의 baseline 또는 supplementary TC가 필요합니다.
+  TC가 모두 obsolete 상태라면, 대체 TC를 추가하세요.
+  ISO 26262 Part 6 §9.3 (테스트 추적성 필수)
+EOF
+    return 1
+  fi
 
   # active TC의 req_id 매핑 (tc_id → req_id)
   local tc_req_map
@@ -461,6 +478,58 @@ if [ "$TOOL" = "Bash" ]; then
     exit 2
   fi
 
+  # ── T1-2: 파괴적 git 명령 차단 ──
+  # git tag 삭제 → verified 태그 보호 (A2 방어)
+  # git checkout/restore .claude/ → hook 복원 방지 (A3 방어)
+  # git reset --hard → 전체 상태 초기화 방지
+  # git push --force → 원격 이력 파괴 방지
+  # 주의: 모든 패턴에 ^\s* 앵커 사용. 커밋 메시지 내 텍스트 오탐 방지.
+  #       (예: git commit -m "block git tag -d" → git commit이므로 통과)
+  if echo "$CMD" | grep -qE '^\s*git\s'; then
+    # git tag -d / --delete
+    if echo "$CMD" | grep -qE '^\s*git\s+tag\s+(-d|--delete)\b'; then
+      cat >&2 <<EOF
+BLOCKED: git tag 삭제가 차단되었습니다.
+  verified 태그는 Baseline TC 불변 검증(Check 4)에 필수입니다.
+  태그를 삭제하면 형상 관리 무결성이 훼손됩니다.
+  ISO 26262 Part 8 §7.4.3 (형상 관리)
+EOF
+      exit 2
+    fi
+
+    # git checkout/restore로 .claude/ 파일 복원 (branch 생성 제외)
+    if echo "$CMD" | grep -qE '^\s*git\s+(checkout|restore)\b' && \
+       echo "$CMD" | grep -qE '\.claude/' && \
+       ! echo "$CMD" | grep -qE '^\s*git\s+checkout\s+-[bB]\b'; then
+      cat >&2 <<EOF
+BLOCKED: .claude/ 파일 복원이 차단되었습니다.
+  git checkout/restore로 hook을 이전 버전으로 되돌릴 수 없습니다.
+  Guard hook의 무결성을 보호합니다.
+EOF
+      exit 2
+    fi
+
+    # git reset --hard
+    if echo "$CMD" | grep -qE '^\s*git\s+reset\s+--hard\b'; then
+      cat >&2 <<EOF
+BLOCKED: git reset --hard가 차단되었습니다.
+  HITL 상태, 형상 이력, 그리고 진행 중인 작업이 파괴될 수 있습니다.
+  특정 파일만 되돌리려면 git checkout -- <file>을 사용하세요.
+EOF
+      exit 2
+    fi
+
+    # git push --force / -f (--force-with-lease 포함)
+    if echo "$CMD" | grep -qE '^\s*git\s+push\s+.*(-f|--force)\b'; then
+      cat >&2 <<EOF
+BLOCKED: git push --force가 차단되었습니다.
+  원격 저장소의 형상 이력이 파괴될 수 있습니다.
+  일반 git push를 사용하세요.
+EOF
+      exit 2
+    fi
+  fi
+
   # 쓰기 연산 감지 (sed -i, 리다이렉트, cp, mv, rm, tee)
   IS_WRITE=false
   echo "$CMD" | grep -qE 'sed\s.*-i' && IS_WRITE=true
@@ -572,28 +641,76 @@ esac
 [ ! -f "$STATE" ] && exit 0
 
 # ══════════════════════════════════════════════════════════════
-# ── Layer 3: hitl-state.json에 verified 전환 시 추적성 검사 ──
+# ── Layer 3: hitl-state.json 전환 유효성 + verified gate ──
 # ══════════════════════════════════════════════════════════════
 case "$FILE_PATH" in
   */.omc/hitl-state.json)
-    # Write tool: 새 JSON에서 verified 전환 area 식별
+    # Write tool: 전환 유효성 검사 + verified gate (T1-1)
     if [ "$TOOL" = "Write" ]; then
       NEW_CONTENT=$(echo "$INPUT" | jq -r '.tool_input.content // empty')
       if [ -n "$NEW_CONTENT" ]; then
-        # 새 JSON에서 verified phase인 area 찾기
-        NEW_VERIFIED=$(echo "$NEW_CONTENT" | jq -r '
-          .areas // {} | to_entries[] | select(.value.phase == "verified") | .key
-        ' 2>/dev/null) || NEW_VERIFIED=""
+        # ── 모든 영역의 phase 전환 유효성 검사 ──
+        TRANSITION_ERRORS=""
+        TRANSITION_ERROR_COUNT=0
 
-        for area in $NEW_VERIFIED; do
-          # 현재 state에서 이 area가 verified가 아니면 → 전환 중
-          CUR_PHASE=$(jq -r --arg a "$area" '.areas[$a].phase // "unknown"' "$STATE" 2>/dev/null) || CUR_PHASE="unknown"
-          if [ "$CUR_PHASE" != "verified" ]; then
-            if ! verified_gate "$area"; then
+        NEW_AREAS=$(echo "$NEW_CONTENT" | jq -r '
+          .areas // {} | to_entries[] | "\(.key)|\(.value.phase // "unknown")"
+        ' 2>/dev/null) || NEW_AREAS=""
+
+        while IFS='|' read -r T_AREA T_NEW_PHASE; do
+          [ -z "$T_AREA" ] || [ -z "$T_NEW_PHASE" ] && continue
+
+          T_CUR_PHASE=$(jq -r --arg a "$T_AREA" '.areas[$a].phase // "unknown"' "$STATE" 2>/dev/null) || T_CUR_PHASE="unknown"
+
+          # 같은 phase면 전환 아님 → 통과
+          [ "$T_CUR_PHASE" = "$T_NEW_PHASE" ] && continue
+          # 새 영역 추가 (현재 unknown) → 통과
+          [ "$T_CUR_PHASE" = "unknown" ] && continue
+
+          # 유효한 전환 맵
+          T_VALID=false
+          ALLOWED_TRANSITIONS=" spec_tc tc_code code_test test_verified tc_spec code_spec code_tc test_spec test_tc test_code verified_spec verified_tc verified_code "
+          T_KEY="${T_CUR_PHASE}_${T_NEW_PHASE}"
+          case "$ALLOWED_TRANSITIONS" in
+            *" ${T_KEY} "*) T_VALID=true ;;
+          esac
+
+          if ! $T_VALID; then
+            TRANSITION_ERRORS="${TRANSITION_ERRORS}  - ${T_AREA}: ${T_CUR_PHASE} → ${T_NEW_PHASE} (허용되지 않는 전환)\n"
+            TRANSITION_ERROR_COUNT=$((TRANSITION_ERROR_COUNT + 1))
+          fi
+
+          # Reentry: cycle 증가 검증
+          if [ "$T_CUR_PHASE" = "verified" ] && $T_VALID; then
+            T_CUR_CYCLE=$(jq -r --arg a "$T_AREA" '.areas[$a].cycle // 1' "$STATE" 2>/dev/null) || T_CUR_CYCLE=1
+            T_NEW_CYCLE=$(echo "$NEW_CONTENT" | jq -r --arg a "$T_AREA" '.areas[$a].cycle // 1' 2>/dev/null) || T_NEW_CYCLE=1
+            if [ "$T_NEW_CYCLE" -le "$T_CUR_CYCLE" ]; then
+              TRANSITION_ERRORS="${TRANSITION_ERRORS}  - ${T_AREA}: reentry 시 cycle 증가 필요 (현재: ${T_CUR_CYCLE}, 새 값: ${T_NEW_CYCLE})\n"
+              TRANSITION_ERROR_COUNT=$((TRANSITION_ERROR_COUNT + 1))
+            fi
+          fi
+
+          # verified 전환: verified gate 실행
+          if [ "$T_NEW_PHASE" = "verified" ]; then
+            if ! verified_gate "$T_AREA"; then
               exit 2
             fi
           fi
-        done
+        done <<< "$NEW_AREAS"
+
+        if [ "$TRANSITION_ERROR_COUNT" -gt 0 ]; then
+          cat >&2 <<EOF
+BLOCKED: hitl-state.json — Phase 전환 유효성 위반
+  ${TRANSITION_ERROR_COUNT}개 문제:
+$(printf "$TRANSITION_ERRORS")
+  허용된 전환:
+    Forward:  spec→tc, tc→code, code→test, test→verified
+    Backward: tc→spec, code→spec, code→tc, test→spec, test→tc, test→code
+    Reentry:  verified→spec/tc/code (cycle++ 필수)
+  CLAUDE.md의 5-Phase 상태 머신을 참조하세요.
+EOF
+          exit 2
+        fi
       fi
     fi
 
